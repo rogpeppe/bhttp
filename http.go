@@ -16,12 +16,11 @@ import (
 	"strings"
 	"unicode"
 
-	flag "launchpad.net/gnuflag"
-	"launchpad.net/rjson"
-
 	"code.google.com/p/go.net/publicsuffix"
 	"github.com/juju/persistent-cookiejar"
 	"gopkg.in/macaroon-bakery.v0/httpbakery"
+	flag "launchpad.net/gnuflag"
+	"launchpad.net/rjson"
 )
 
 var flags struct {
@@ -243,13 +242,14 @@ func (ctxt *context) doRequest(u *url.URL, req *http.Request) error {
 	var indented bytes.Buffer
 	if err := rjson.Indent(&indented, data, "", "\t"); err != nil {
 		warningf("cannot pretty print JSON response: %v", err)
-		if len(data) > 0 && data[len(data)-1] != '\n' {
-			data = append(data, '\n')
-		}
 		os.Stdout.Write(data)
 		return nil
 	}
-	os.Stdout.Write(indented.Bytes())
+	data = indented.Bytes()
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		data = append(data, '\n')
+	}
+	os.Stdout.Write(data)
 	return nil
 }
 
