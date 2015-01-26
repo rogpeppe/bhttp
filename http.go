@@ -3,7 +3,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -12,30 +14,17 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 
 	"code.google.com/p/go.net/publicsuffix"
+	"github.com/juju/loggo"
 	"github.com/juju/persistent-cookiejar"
 	"gopkg.in/macaroon-bakery.v0/httpbakery"
 	flag "launchpad.net/gnuflag"
 	"launchpad.net/rjson"
 )
-
-var flags struct {
-	json       bool
-	form       bool
-	headers    bool
-	body       bool
-	rjson      bool
-	raw        bool
-	noBrowser  bool
-	basicAuth  string
-	cookieFile string
-
-	// TODO auth, verify, proxy, file, timeout
-}
 
 const helpMessage = `usage: http [flag...] [METHOD] URL [REQUEST_ITEM [REQUEST_ITEM...]]
 
@@ -94,134 +83,254 @@ const helpMessage = `usage: http [flag...] [METHOD] URL [REQUEST_ITEM [REQUEST_I
           field-name-with\:colon=value
 `
 
+type params struct {
+	json       bool
+	form       bool
+	headers    bool
+	body       bool
+	rjson      bool
+	raw        bool
+	debug      bool
+	noBrowser  bool
+	basicAuth  string
+	cookieFile string
+	// TODO auth, verify, proxy, file, timeout
+
+	url     *url.URL
+	method  string
+	keyVals []keyVal
+}
+
+type context struct {
+	url       *url.URL
+	stdin     io.Reader
+	method    string
+	header    http.Header
+	urlValues url.Values
+	form      url.Values
+	jsonObj   map[string]interface{}
+	body      io.ReadSeeker
+}
+
+var errUsage = errors.New("bad usage")
+
+type keyVal struct {
+	key string
+	sep string
+	val string
+}
+
 func main() {
-	flag.BoolVar(&flags.json, "j", false, "serialize  data  items  as a JSON object")
-	flag.BoolVar(&flags.json, "json", false, "")
+	fset := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	ctxt, p, err := newContext(fset, os.Args[1:])
+	if err != nil {
+		if err == errUsage {
+			fset.Usage()
+		} else {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+		}
+		os.Exit(2)
+	}
+	jar, client, err := httpClient(p.cookieFile)
+	if err != nil {
+		fatalf("cannot make HTTP client: %v", err)
+	}
+	defer cookiejar.SaveToFile(jar, p.cookieFile)
+	resp, err := ctxt.doRequest(client, os.Stdin)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	defer resp.Body.Close()
+	if err := showResponse(p, resp, os.Stdout); err != nil {
+		fatalf("%v", err)
+	}
+}
 
-	flag.BoolVar(&flags.form, "f", false, "serialize data items as form values")
-	flag.BoolVar(&flags.form, "form", false, "")
+func newContext(fset *flag.FlagSet, args []string) (*context, *params, error) {
+	p, err := parseArgs(fset, args)
+	if err != nil {
+		return nil, nil, err
+	}
+	if p.debug {
+		loggo.ConfigureLoggers("DEBUG")
+	}
+	ctxt := &context{
+		url:       p.url,
+		method:    p.method,
+		header:    make(http.Header),
+		urlValues: make(url.Values),
+		form:      make(url.Values),
+		jsonObj:   make(map[string]interface{}),
+	}
+	for _, kv := range p.keyVals {
+		if err := ctxt.addKeyVal(p, kv); err != nil {
+			return nil, nil, err
+		}
+	}
+	if p.basicAuth != "" {
+		ctxt.header.Set("Authorization",
+			"Basic "+base64.StdEncoding.EncodeToString([]byte(p.basicAuth)))
+	}
+	if p.json {
+		ctxt.header.Set("Content-Type", "application/json")
+	}
+	return ctxt, p, nil
+}
 
-	flag.BoolVar(&flags.headers, "t", false, "print only the response headers")
-	flag.BoolVar(&flags.headers, "headers", false, "")
+func parseArgs(fset *flag.FlagSet, args []string) (*params, error) {
+	var p params
+	var printHeaders, noBody bool
+	fset.BoolVar(&p.json, "j", false, "serialize  data  items  as a JSON object")
+	fset.BoolVar(&p.json, "json", false, "")
 
-	flag.BoolVar(&flags.body, "b", false, "print only the response body")
-	flag.BoolVar(&flags.body, "body", false, "")
+	fset.BoolVar(&p.form, "f", false, "serialize data items as form values")
+	fset.BoolVar(&p.form, "form", false, "")
 
-	flag.BoolVar(&flags.noBrowser, "B", false, "do not open URLs in web browser")
-	flag.BoolVar(&flags.noBrowser, "no-browser", false, "")
+	fset.BoolVar(&printHeaders, "h", false, "print the response headers")
+	fset.BoolVar(&printHeaders, "headers", false, "")
 
-	flag.BoolVar(&flags.raw, "raw", false, "print response body without any JSON post-processing")
+	fset.BoolVar(&noBody, "B", false, "do not print response body")
+	fset.BoolVar(&noBody, "body", false, "")
 
-	flag.StringVar(&flags.basicAuth, "a", "", "http basic auth (username:password)")
-	flag.StringVar(&flags.basicAuth, "auth", "", "")
+	fset.BoolVar(&p.debug, "debug", false, "print debugging messages")
 
-	flag.StringVar(&flags.cookieFile, "cookiefile", filepath.Join(os.Getenv("HOME"), ".go-cookies"), "file to store persistent cookies in")
+	fset.BoolVar(&p.noBrowser, "W", false, "do not open macaroon-login URLs in web browser")
+	fset.BoolVar(&p.noBrowser, "no-browser", false, "")
+
+	fset.BoolVar(&p.raw, "raw", false, "print response body without any JSON post-processing")
+
+	fset.StringVar(&p.basicAuth, "a", "", "http basic auth (username:password)")
+	fset.StringVar(&p.basicAuth, "auth", "", "")
+
+	fset.StringVar(&p.cookieFile, "cookiefile", filepath.Join(os.Getenv("HOME"), ".go-cookies"), "file to store persistent cookies in")
 
 	// TODO --file (multipart upload)
 	// TODO --timeout
 	// TODO --proxy
 	// TODO (??) --verify
 
-	flag.Usage = func() {
+	fset.Usage = func() {
 		fmt.Fprint(os.Stderr, helpMessage)
-		flag.PrintDefaults()
-		os.Exit(2)
+		fset.PrintDefaults()
 	}
-
-	flag.Parse(true)
-	args := flag.Args()
+	if err := fset.Parse(true, args); err != nil {
+		return nil, err
+	}
+	p.headers = printHeaders
+	p.body = !noBody
+	args = fset.Args()
 	if len(args) == 0 {
-		flag.Usage()
+		return nil, errUsage
 	}
+	if isMethod(args[0]) {
+		p.method, args = strings.ToUpper(args[0]), args[1:]
+		if len(args) == 0 {
+			return nil, errUsage
+		}
+	}
+	urlStr := args[0]
+	if strings.HasPrefix(urlStr, ":") {
+		// shorthand for localhost.
+		if strings.HasPrefix(urlStr, ":/") {
+			urlStr = "http://localhost" + urlStr[1:]
+		} else {
+			urlStr = "http://localhost" + urlStr
+		}
+	}
+	if !strings.HasPrefix(urlStr, "http:") && !strings.HasPrefix(urlStr, "https:") {
+		urlStr = "http://" + urlStr
+	}
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL %q: %v", args[0], err)
+	}
+	if u.Host == "" {
+		u.Host = "localhost"
+	}
+	p.url, args = u, args[1:]
+	p.keyVals = make([]keyVal, len(args))
+	for i, arg := range args {
+		kv, err := parseKeyVal(arg)
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse %q: %v", arg, err)
+		}
+		if kv.sep == "=" && p.method == "" {
+			p.method = "POST"
+		}
+		p.keyVals[i] = kv
+	}
+	if p.method == "" {
+		p.method = "GET"
+	}
+	return &p, nil
+}
+
+func isMethod(s string) bool {
+	for _, r := range s {
+		if !('a' <= r && r <= 'z' ||
+			'A' <= r && r <= 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+func (ctxt *context) doRequest(client *http.Client, stdin io.Reader) (*http.Response, error) {
 	req := &http.Request{
+		URL:        ctxt.url,
 		Proto:      "HTTP/1.1",
 		ProtoMajor: 1,
 		ProtoMinor: 1,
-	}
-	if isAllCaps(args[0]) {
-		req.Method, args = args[0], args[1:]
-	}
-	if len(args) == 0 {
-		flag.Usage()
-	}
-	u, err := url.Parse(args[0])
-	if err != nil {
-		fatalf("invalid URL %q: %v", args[0], err)
-	}
-	args = args[1:]
-	req.URL = u
-	req.Host = req.URL.Host
-
-	ctxt := &context{
-		useJSON:   flags.json,
-		method:    "GET",
-		header:    make(http.Header),
-		urlValues: make(url.Values),
-		form:      make(url.Values),
-		jsonObj:   make(map[string]interface{}),
-	}
-	for _, arg := range args {
-		if err := ctxt.addArg(arg); err != nil {
-			fatalf("%s", err)
-		}
-	}
-	if err := ctxt.doRequest(u, req); err != nil {
-		fatalf("%s", err)
-	}
-}
-
-func (ctxt *context) doRequest(u *url.URL, req *http.Request) error {
-	if req.Method == "" {
-		req.Method = ctxt.method
+		Method:     ctxt.method,
+		Header:     ctxt.header,
 	}
 	if len(ctxt.urlValues) > 0 {
-		if u.RawQuery != "" {
-			u.RawQuery += "&"
+		if req.URL.RawQuery != "" {
+			req.URL.RawQuery += "&"
 		}
-		u.RawQuery += ctxt.urlValues.Encode()
-	}
-	if ctxt.useJSON {
-		maybeSetContentType(req, "application/json")
+		req.URL.RawQuery += ctxt.urlValues.Encode()
 	}
 	var body []byte
-	req.Header = ctxt.header
-	if flags.basicAuth != "" {
-		req.Header["Authorization"] = []string{flags.basicAuth}
-	}
 	switch {
 	case len(ctxt.form) > 0:
-		maybeSetContentType(req, "application/x-www-form-urlencoded")
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		body = []byte(ctxt.form.Encode())
 
 	case len(ctxt.jsonObj) > 0:
 		data, err := json.Marshal(ctxt.jsonObj)
 		if err != nil {
-			return fmt.Errorf("cannot marshal JSON: %v", err)
+			return nil, fmt.Errorf("cannot marshal JSON: %v", err)
 		}
 		body = data
 	case req.Method != "GET" && req.Method != "HEAD":
 		// No fields specified and it looks like we need a body.
 
 		// TODO check if it's seekable or make a temp file.
-		data, err := ioutil.ReadAll(os.Stdin)
+		data, err := ioutil.ReadAll(stdin)
 		if err != nil {
-			return fmt.Errorf("error reading stdin: %v", err)
+			return nil, fmt.Errorf("error reading stdin: %v", err)
 		}
 		// TODO if we're expecting JSON, accept rjson too.
 		body = data
 	}
 	getBody := httpbakery.SeekerBody(bytes.NewReader(body))
 
-	jar, client, err := httpClient(flags.cookieFile)
-	if err != nil {
-		return fmt.Errorf("cannot make HTTP client: %v", err)
-	}
-	defer cookiejar.SaveToFile(jar, flags.cookieFile)
 	resp, err := httpbakery.DoWithBody(client, req, getBody, visitWebPage)
 	if err != nil {
-		return fmt.Errorf("cannot do HTTP request: %v", err)
+		return nil, fmt.Errorf("cannot do HTTP request: %v", err)
 	}
-	defer resp.Body.Close()
+	return resp, nil
+}
+
+func showResponse(p *params, resp *http.Response, stdout io.Writer) error {
+	if p.headers {
+		fmt.Fprintf(stdout, "%s %s\n", resp.Proto, resp.Status)
+		printHeaders(stdout, resp.Header)
+		fmt.Fprintf(stdout, "\n")
+	}
+	if !p.body {
+		return nil
+	}
 	isJSONResp := false
 	if ctype := resp.Header.Get("Content-Type"); ctype != "" {
 		mediaType, _, err := mime.ParseMediaType(ctype)
@@ -232,7 +341,8 @@ func (ctxt *context) doRequest(u *url.URL, req *http.Request) error {
 		}
 	}
 	if !isJSONResp {
-		io.Copy(os.Stdout, resp.Body)
+		// TODO uncompress?
+		io.Copy(stdout, resp.Body)
 		return nil
 	}
 	data, err := ioutil.ReadAll(resp.Body)
@@ -242,15 +352,28 @@ func (ctxt *context) doRequest(u *url.URL, req *http.Request) error {
 	var indented bytes.Buffer
 	if err := rjson.Indent(&indented, data, "", "\t"); err != nil {
 		warningf("cannot pretty print JSON response: %v", err)
-		os.Stdout.Write(data)
+		stdout.Write(data)
 		return nil
 	}
 	data = indented.Bytes()
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		data = append(data, '\n')
 	}
-	os.Stdout.Write(data)
+	stdout.Write(data)
 	return nil
+}
+
+func printHeaders(w io.Writer, h http.Header) {
+	keys := make([]string, 0, len(h))
+	for key := range h {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		for _, attr := range h[key] {
+			fmt.Fprintf(w, "%s: %s\n", key, attr)
+		}
+	}
 }
 
 func visitWebPage(url *url.URL) error {
@@ -275,61 +398,77 @@ func httpClient(cookieFile string) (*cookiejar.Jar, *http.Client, error) {
 	return jar, client, nil
 }
 
-func maybeSetContentType(req *http.Request, t string) {
-	if _, ok := req.Header["Content-Type"]; !ok {
-		req.Header.Set("Content-Type", t)
-	}
-}
-
-type context struct {
-	useJSON bool
-
-	method    string
-	header    http.Header
-	urlValues url.Values
-	form      url.Values
-	jsonObj   map[string]interface{}
-}
-
-var ops = map[string]func(ctxt *context, key, val string) error{
+var sepFuncs = map[string]func(ctxt *context, p *params, key, val string) error{
 	":":  (*context).httpHeader,
 	"==": (*context).urlParam,
 	"=":  (*context).dataString,
 	":=": (*context).jsonOther,
 }
 
-var argPat = regexp.MustCompile(`^((\\.)|[^:=@])(:|==|=|:=|@|=@|:=@)(.*)$`)
-
-func (ctxt *context) addArg(s string) error {
-	m := argPat.FindStringSubmatch(s)
-	if m == nil {
-		return fmt.Errorf("unrecognized key pair %q", s)
-	}
-	key, op, val := m[1], m[2], m[3]
-	key = unquoteKey(key)
-	f := ops[op]
+func (ctxt *context) addKeyVal(p *params, kv keyVal) error {
+	f := sepFuncs[kv.sep]
 	if f == nil {
-		return fmt.Errorf("key value type %q not yet recognized", op)
+		return fmt.Errorf("key value type separator %q not yet recognized", kv.sep)
 	}
-	return f(ctxt, key, val)
+	return f(ctxt, p, kv.key, kv.val)
+}
+
+// separators holds all the possible key-pair separators, most ambiguous first.
+var separators = []string{
+	":=@",
+	":=",
+	":",
+	"==",
+	"=@",
+	"=",
+	"@",
+}
+
+func parseKeyVal(s string) (keyVal, error) {
+	keyBytes := make([]byte, 0, len(s))
+	wasBackslash := false
+	for i, r := range s {
+		if r == '\\' && !wasBackslash {
+			wasBackslash = true
+			continue
+		}
+		if wasBackslash {
+			keyBytes = append(keyBytes, string(r)...)
+			wasBackslash = false
+			continue
+		}
+		for _, sep := range separators {
+			if strings.HasPrefix(s[i:], sep) {
+				if len(keyBytes) == 0 {
+					return keyVal{}, fmt.Errorf("empty key")
+				}
+				return keyVal{
+					key: string(keyBytes),
+					sep: sep,
+					val: s[i+len(sep):],
+				}, nil
+			}
+		}
+		keyBytes = append(keyBytes, string(r)...)
+	}
+	return keyVal{}, fmt.Errorf("no key-pair separator found")
 }
 
 // key:val
-func (ctxt *context) httpHeader(key, val string) error {
+func (ctxt *context) httpHeader(p *params, key, val string) error {
 	ctxt.header.Add(key, val)
 	return nil
 }
 
 // key==val
-func (ctxt *context) urlParam(key, val string) error {
+func (ctxt *context) urlParam(p *params, key, val string) error {
 	ctxt.urlValues.Add(key, val)
 	return nil
 }
 
 // key=val
-func (ctxt *context) dataString(key, val string) error {
-	ctxt.method = "POST"
-	if ctxt.useJSON {
+func (ctxt *context) dataString(p *params, key, val string) error {
+	if p.json {
 		ctxt.jsonObj[key] = val
 	} else {
 		ctxt.form.Add(key, val)
@@ -338,8 +477,8 @@ func (ctxt *context) dataString(key, val string) error {
 }
 
 // key:=val
-func (ctxt *context) jsonOther(key, val string) error {
-	if !ctxt.useJSON {
+func (ctxt *context) jsonOther(p *params, key, val string) error {
+	if !p.json {
 		return fmt.Errorf("cannot specify non-string key unless --json is specified")
 	}
 	var m json.RawMessage
@@ -348,20 +487,6 @@ func (ctxt *context) jsonOther(key, val string) error {
 	}
 	ctxt.jsonObj[key] = &m
 	return nil
-}
-
-func unquoteKey(key string) string {
-	nkey := make([]byte, 0, len(key))
-	for i := 0; i < len(key); i++ {
-		if i < len(key)-1 && key[i] == '\\' {
-			nkey = append(nkey, key[i+1])
-			i++
-		} else {
-			nkey = append(nkey, key[i])
-		}
-	}
-	return string(nkey)
-
 }
 
 func fatalf(f string, a ...interface{}) {
