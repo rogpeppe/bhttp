@@ -94,6 +94,7 @@ type params struct {
 	noBrowser  bool
 	basicAuth  string
 	cookieFile string
+	useStdin   bool
 	// TODO auth, verify, proxy, file, timeout
 
 	url     *url.URL
@@ -136,7 +137,11 @@ func main() {
 		fatalf("cannot make HTTP client: %v", err)
 	}
 	defer cookiejar.SaveToFile(jar, p.cookieFile)
-	resp, err := ctxt.doRequest(client, os.Stdin)
+	var stdin io.Reader
+	if p.useStdin {
+		stdin = os.Stdin
+	}
+	resp, err := ctxt.doRequest(client, stdin)
 	if err != nil {
 		fatalf("%v", err)
 	}
@@ -166,6 +171,9 @@ func newContext(fset *flag.FlagSet, args []string) (*context, *params, error) {
 		if err := ctxt.addKeyVal(p, kv); err != nil {
 			return nil, nil, err
 		}
+	}
+	if p.useStdin && (len(ctxt.form) > 0 || len(ctxt.jsonObj) > 0) {
+		return nil, nil, errors.New("cannot read body from stdin when form or JSON body is specified")
 	}
 	if p.basicAuth != "" {
 		ctxt.header.Set("Authorization",
@@ -203,6 +211,8 @@ func parseArgs(fset *flag.FlagSet, args []string) (*params, error) {
 	fset.StringVar(&p.basicAuth, "auth", "", "")
 
 	fset.StringVar(&p.cookieFile, "cookiefile", filepath.Join(os.Getenv("HOME"), ".go-cookies"), "file to store persistent cookies in")
+
+	fset.BoolVar(&p.useStdin, "stdin", false, "read request body from standard input")
 
 	// TODO --file (multipart upload)
 	// TODO --timeout
@@ -302,7 +312,7 @@ func (ctxt *context) doRequest(client *http.Client, stdin io.Reader) (*http.Resp
 			return nil, fmt.Errorf("cannot marshal JSON: %v", err)
 		}
 		body = data
-	case req.Method != "GET" && req.Method != "HEAD":
+	case req.Method != "GET" && req.Method != "HEAD" && stdin != nil:
 		// No fields specified and it looks like we need a body.
 
 		// TODO check if it's seekable or make a temp file.
@@ -313,6 +323,7 @@ func (ctxt *context) doRequest(client *http.Client, stdin io.Reader) (*http.Resp
 		// TODO if we're expecting JSON, accept rjson too.
 		body = data
 	}
+	req.ContentLength = int64(len(body))
 	getBody := httpbakery.SeekerBody(bytes.NewReader(body))
 
 	resp, err := httpbakery.DoWithBody(client, req, getBody, visitWebPage)
