@@ -18,9 +18,9 @@ import (
 	"strings"
 	"unicode"
 
-	"code.google.com/p/go.net/publicsuffix"
 	"github.com/juju/loggo"
 	"github.com/juju/persistent-cookiejar"
+	"golang.org/x/net/publicsuffix"
 	"gopkg.in/macaroon-bakery.v0/httpbakery"
 	flag "launchpad.net/gnuflag"
 	"launchpad.net/rjson"
@@ -136,7 +136,7 @@ func main() {
 	if err != nil {
 		fatalf("cannot make HTTP client: %v", err)
 	}
-	defer cookiejar.SaveToFile(jar, p.cookieFile)
+	defer jar.Save()
 	var stdin io.Reader
 	if p.useStdin {
 		stdin = os.Stdin
@@ -400,8 +400,7 @@ func httpClient(cookieFile string) (*cookiejar.Jar, *http.Client, error) {
 		panic(err)
 	}
 	// TODO allow disabling of persistent cookies
-	err = cookiejar.LoadFromFile(jar, cookieFile)
-	if err != nil {
+	if err := jar.Load(cookieFile); err != nil {
 		return nil, nil, err
 	}
 	client := httpbakery.NewHTTPClient()

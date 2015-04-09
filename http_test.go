@@ -487,7 +487,7 @@ func (*suite) TestDoRequest(c *gc.C) {
 
 func (*suite) TestMacaraq(c *gc.C) {
 	checked := false
-	d := bakerytest.NewDischarger(nil, func(cond, arg string) ([]checkers.Caveat, error) {
+	d := bakerytest.NewDischarger(nil, func(_ *http.Request, cond, arg string) ([]checkers.Caveat, error) {
 		if cond != "something" {
 			return nil, fmt.Errorf("unexpected 3rd party cond")
 		}
@@ -515,7 +515,7 @@ func (*suite) TestMacaraq(c *gc.C) {
 			Condition: "something",
 		}})
 		c.Check(err, gc.IsNil)
-		httpbakery.WriteDischargeRequiredError(w, m, checkErr)
+		httpbakery.WriteDischargeRequiredError(w, m, "/", checkErr)
 	}))
 
 	fset := flag.NewFlagSet("http", flag.ContinueOnError)
