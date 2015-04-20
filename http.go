@@ -21,7 +21,7 @@ import (
 	"github.com/juju/loggo"
 	"github.com/juju/persistent-cookiejar"
 	"golang.org/x/net/publicsuffix"
-	"gopkg.in/macaroon-bakery.v0/httpbakery"
+	"gopkg.in/macaroon-bakery.v1/httpbakery"
 	flag "launchpad.net/gnuflag"
 	"launchpad.net/rjson"
 )
@@ -132,7 +132,7 @@ func main() {
 		}
 		os.Exit(2)
 	}
-	jar, client, err := httpClient(p.cookieFile)
+	jar, client, err := newClient(p.cookieFile)
 	if err != nil {
 		fatalf("cannot make HTTP client: %v", err)
 	}
@@ -285,7 +285,7 @@ func isMethod(s string) bool {
 	return true
 }
 
-func (ctxt *context) doRequest(client *http.Client, stdin io.Reader) (*http.Response, error) {
+func (ctxt *context) doRequest(client *httpbakery.Client, stdin io.Reader) (*http.Response, error) {
 	req := &http.Request{
 		URL:        ctxt.url,
 		Proto:      "HTTP/1.1",
@@ -324,9 +324,8 @@ func (ctxt *context) doRequest(client *http.Client, stdin io.Reader) (*http.Resp
 		body = data
 	}
 	req.ContentLength = int64(len(body))
-	getBody := httpbakery.SeekerBody(bytes.NewReader(body))
 
-	resp, err := httpbakery.DoWithBody(client, req, getBody, visitWebPage)
+	resp, err := client.DoWithBody(req, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("cannot do HTTP request: %v", err)
 	}
@@ -387,12 +386,7 @@ func printHeaders(w io.Writer, h http.Header) {
 	}
 }
 
-func visitWebPage(url *url.URL) error {
-	fmt.Printf("please visit this URL:\n%s\n", url)
-	return nil
-}
-
-func httpClient(cookieFile string) (*cookiejar.Jar, *http.Client, error) {
+func newClient(cookieFile string) (*cookiejar.Jar, *httpbakery.Client, error) {
 	jar, err := cookiejar.New(&cookiejar.Options{
 		PublicSuffixList: publicsuffix.List,
 	})
@@ -403,8 +397,9 @@ func httpClient(cookieFile string) (*cookiejar.Jar, *http.Client, error) {
 	if err := jar.Load(cookieFile); err != nil {
 		return nil, nil, err
 	}
-	client := httpbakery.NewHTTPClient()
-	client.Jar = jar
+	client := httpbakery.NewClient()
+	client.Client.Jar = jar
+	client.VisitWebPage = httpbakery.OpenWebBrowser
 	return jar, client, nil
 }
 

@@ -13,10 +13,10 @@ import (
 
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/macaroon-bakery.v0/bakery"
-	"gopkg.in/macaroon-bakery.v0/bakery/checkers"
-	"gopkg.in/macaroon-bakery.v0/bakerytest"
-	"gopkg.in/macaroon-bakery.v0/httpbakery"
+	"gopkg.in/macaroon-bakery.v1/bakery"
+	"gopkg.in/macaroon-bakery.v1/bakery/checkers"
+	"gopkg.in/macaroon-bakery.v1/bakerytest"
+	"gopkg.in/macaroon-bakery.v1/httpbakery"
 	flag "launchpad.net/gnuflag"
 )
 
@@ -459,7 +459,7 @@ func (*suite) TestDoRequest(c *gc.C) {
 	srv := httptest.NewServer(&h)
 	for i, test := range doRequestTests {
 		c.Logf("test %d: %s", i, test.about)
-		client := httpbakery.NewHTTPClient()
+		client := httpbakery.NewClient()
 		u, err := url.Parse(srv.URL + test.url)
 		c.Assert(err, gc.IsNil)
 		test.ctxt.url = u
@@ -524,7 +524,7 @@ func (*suite) TestMacaraq(c *gc.C) {
 		"x=y",
 	})
 	c.Assert(err, gc.IsNil)
-	client := httpbakery.NewHTTPClient()
+	client := httpbakery.NewClient()
 	resp, err := ctxt.doRequest(client, nil)
 	c.Assert(err, gc.IsNil)
 	defer resp.Body.Close()
