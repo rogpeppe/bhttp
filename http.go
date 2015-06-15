@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -20,10 +21,10 @@ import (
 
 	"github.com/juju/loggo"
 	"github.com/juju/persistent-cookiejar"
+	"github.com/rogpeppe/rjson"
 	"golang.org/x/net/publicsuffix"
-	"gopkg.in/macaroon-bakery.v0/httpbakery"
+	"gopkg.in/macaroon-bakery.v1/httpbakery"
 	flag "launchpad.net/gnuflag"
-	"launchpad.net/rjson"
 )
 
 const helpMessage = `usage: http [flag...] [METHOD] URL [REQUEST_ITEM [REQUEST_ITEM...]]
@@ -95,6 +96,7 @@ type params struct {
 	basicAuth  string
 	cookieFile string
 	useStdin   bool
+	insecure   bool
 	// TODO auth, verify, proxy, file, timeout
 
 	url     *url.URL
@@ -132,11 +134,13 @@ func main() {
 		}
 		os.Exit(2)
 	}
-	jar, client, err := httpClient(p.cookieFile)
+	jar, client, err := newClient(p)
 	if err != nil {
 		fatalf("cannot make HTTP client: %v", err)
 	}
-	defer jar.Save()
+	if jar != nil {
+		defer jar.Save()
+	}
 	var stdin io.Reader
 	if p.useStdin {
 		stdin = os.Stdin
@@ -187,7 +191,7 @@ func newContext(fset *flag.FlagSet, args []string) (*context, *params, error) {
 
 func parseArgs(fset *flag.FlagSet, args []string) (*params, error) {
 	var p params
-	var printHeaders, noBody bool
+	var printHeaders, noBody, noCookies bool
 	fset.BoolVar(&p.json, "j", false, "serialize  data  items  as a JSON object")
 	fset.BoolVar(&p.json, "json", false, "")
 
@@ -210,7 +214,12 @@ func parseArgs(fset *flag.FlagSet, args []string) (*params, error) {
 	fset.StringVar(&p.basicAuth, "a", "", "http basic auth (username:password)")
 	fset.StringVar(&p.basicAuth, "auth", "", "")
 
+	fset.BoolVar(&p.insecure, "insecure", false, "skip HTTPS certificate checking")
+
 	fset.StringVar(&p.cookieFile, "cookiefile", filepath.Join(os.Getenv("HOME"), ".go-cookies"), "file to store persistent cookies in")
+
+	fset.BoolVar(&noCookies, "C", false, "disable cookie storage")
+	fset.BoolVar(&noCookies, "no-cookies", false, "")
 
 	fset.BoolVar(&p.useStdin, "stdin", false, "read request body from standard input")
 
@@ -225,6 +234,9 @@ func parseArgs(fset *flag.FlagSet, args []string) (*params, error) {
 	}
 	if err := fset.Parse(true, args); err != nil {
 		return nil, err
+	}
+	if noCookies {
+		p.cookieFile = ""
 	}
 	p.headers = printHeaders
 	p.body = !noBody
@@ -285,7 +297,7 @@ func isMethod(s string) bool {
 	return true
 }
 
-func (ctxt *context) doRequest(client *http.Client, stdin io.Reader) (*http.Response, error) {
+func (ctxt *context) doRequest(client *httpbakery.Client, stdin io.Reader) (*http.Response, error) {
 	req := &http.Request{
 		URL:        ctxt.url,
 		Proto:      "HTTP/1.1",
@@ -324,9 +336,8 @@ func (ctxt *context) doRequest(client *http.Client, stdin io.Reader) (*http.Resp
 		body = data
 	}
 	req.ContentLength = int64(len(body))
-	getBody := httpbakery.SeekerBody(bytes.NewReader(body))
 
-	resp, err := httpbakery.DoWithBody(client, req, getBody, visitWebPage)
+	resp, err := client.DoWithBody(req, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("cannot do HTTP request: %v", err)
 	}
@@ -387,24 +398,31 @@ func printHeaders(w io.Writer, h http.Header) {
 	}
 }
 
-func visitWebPage(url *url.URL) error {
-	fmt.Printf("please visit this URL:\n%s\n", url)
-	return nil
-}
+func newClient(p *params) (*cookiejar.Jar, *httpbakery.Client, error) {
+	client := httpbakery.NewClient()
+	var jar *cookiejar.Jar
+	if p.cookieFile != "" {
+		var err error
+		jar, err = cookiejar.New(&cookiejar.Options{
+			PublicSuffixList: publicsuffix.List,
+		})
+		if err != nil {
+			panic(err)
+		}
+		if err := jar.Load(p.cookieFile); err != nil {
+			return nil, nil, fmt.Errorf("cannot load cookie jar: %v", err)
+		}
+		client.Client.Jar = jar
+	}
+	client.VisitWebPage = httpbakery.OpenWebBrowser
+	if p.insecure {
+		rt := *http.DefaultTransport.(*http.Transport)
+		rt.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true,
+		}
+		client.Transport = &rt
+	}
 
-func httpClient(cookieFile string) (*cookiejar.Jar, *http.Client, error) {
-	jar, err := cookiejar.New(&cookiejar.Options{
-		PublicSuffixList: publicsuffix.List,
-	})
-	if err != nil {
-		panic(err)
-	}
-	// TODO allow disabling of persistent cookies
-	if err := jar.Load(cookieFile); err != nil {
-		return nil, nil, err
-	}
-	client := httpbakery.NewHTTPClient()
-	client.Jar = jar
 	return jar, client, nil
 }
 
