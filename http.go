@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
@@ -22,7 +21,6 @@ import (
 	"github.com/juju/loggo"
 	"github.com/juju/persistent-cookiejar"
 	"github.com/rogpeppe/rjson"
-	"golang.org/x/net/publicsuffix"
 	"gopkg.in/macaroon-bakery.v1/httpbakery"
 	flag "launchpad.net/gnuflag"
 )
@@ -216,7 +214,7 @@ func parseArgs(fset *flag.FlagSet, args []string) (*params, error) {
 
 	fset.BoolVar(&p.insecure, "insecure", false, "skip HTTPS certificate checking")
 
-	fset.StringVar(&p.cookieFile, "cookiefile", filepath.Join(os.Getenv("HOME"), ".go-cookies"), "file to store persistent cookies in")
+	fset.StringVar(&p.cookieFile, "cookiefile", cookiejar.DefaultCookieFile(), "file to store persistent cookies in")
 
 	fset.BoolVar(&noCookies, "C", false, "disable cookie storage")
 	fset.BoolVar(&noCookies, "no-cookies", false, "")
@@ -400,20 +398,6 @@ func printHeaders(w io.Writer, h http.Header) {
 
 func newClient(p *params) (*cookiejar.Jar, *httpbakery.Client, error) {
 	client := httpbakery.NewClient()
-	var jar *cookiejar.Jar
-	if p.cookieFile != "" {
-		var err error
-		jar, err = cookiejar.New(&cookiejar.Options{
-			PublicSuffixList: publicsuffix.List,
-		})
-		if err != nil {
-			panic(err)
-		}
-		if err := jar.Load(p.cookieFile); err != nil {
-			return nil, nil, fmt.Errorf("cannot load cookie jar: %v", err)
-		}
-		client.Client.Jar = jar
-	}
 	client.VisitWebPage = httpbakery.OpenWebBrowser
 	if p.insecure {
 		rt := *http.DefaultTransport.(*http.Transport)
@@ -423,6 +407,14 @@ func newClient(p *params) (*cookiejar.Jar, *httpbakery.Client, error) {
 		client.Transport = &rt
 	}
 
+	if p.cookieFile == "" {
+		return nil, client, nil
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot create cookie jar: %v", err)
+	}
+	client.Client.Jar = jar
 	return jar, client, nil
 }
 
