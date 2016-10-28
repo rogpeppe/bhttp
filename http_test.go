@@ -235,6 +235,30 @@ var newContextTests = []struct {
 		},
 	},
 }, {
+	about: "specific content type and json values",
+	args: []string{
+		"--json",
+		"foo.com",
+		"h1:hval1",
+		"Content-Type:application/foobar",
+		"j1=123",
+	},
+	expectContext: context{
+		method: "POST",
+		header: http.Header{
+			"H1":           {"hval1"},
+			"Content-Type": {"application/foobar"},
+		},
+		jsonObj: map[string]interface{}{
+			"j1": "123",
+		},
+		url: &url.URL{
+			Scheme: "http",
+			Host:   "foo.com",
+			Path:   "",
+		},
+	},
+}, {
 	about: "headers and form values",
 	args: []string{
 		"foo.com",

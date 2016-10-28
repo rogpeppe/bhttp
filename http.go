@@ -181,7 +181,7 @@ func newContext(fset *flag.FlagSet, args []string) (*context, *params, error) {
 		ctxt.header.Set("Authorization",
 			"Basic "+base64.StdEncoding.EncodeToString([]byte(p.basicAuth)))
 	}
-	if p.json {
+	if p.json && ctxt.header.Get("Content-Type") == "" {
 		ctxt.header.Set("Content-Type", "application/json")
 	}
 	return ctxt, p, nil
