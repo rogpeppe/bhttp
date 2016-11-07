@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"unicode"
@@ -21,7 +23,9 @@ import (
 	"github.com/juju/loggo"
 	"github.com/juju/persistent-cookiejar"
 	"github.com/rogpeppe/rjson"
+	errgo "gopkg.in/errgo.v1"
 	"gopkg.in/macaroon-bakery.v2-unstable/httpbakery"
+	"gopkg.in/macaroon-bakery.v2-unstable/httpbakery/agent"
 	flag "launchpad.net/gnuflag"
 )
 
@@ -93,6 +97,7 @@ type params struct {
 	noBrowser  bool
 	basicAuth  string
 	cookieFile string
+	agentFile  string
 	useStdin   bool
 	insecure   bool
 	// TODO auth, verify, proxy, file, timeout
@@ -208,6 +213,8 @@ func parseArgs(fset *flag.FlagSet, args []string) (*params, error) {
 	fset.BoolVar(&p.noBrowser, "no-browser", false, "")
 
 	fset.BoolVar(&p.raw, "raw", false, "print response body without any JSON post-processing")
+
+	fset.StringVar(&p.agentFile, "agent", "", "file to get agent keys from (implies agent authentication when possible)")
 
 	fset.StringVar(&p.basicAuth, "a", "", "http basic auth (username:password)")
 	fset.StringVar(&p.basicAuth, "auth", "", "")
@@ -399,7 +406,15 @@ func printHeaders(w io.Writer, h http.Header) {
 
 func newClient(p *params) (*cookiejar.Jar, *httpbakery.Client, error) {
 	client := httpbakery.NewClient()
-	client.VisitWebPage = httpbakery.OpenWebBrowser
+	if p.agentFile != "" {
+		v, err := readAgentsFile(p.agentFile)
+		if err != nil {
+			return nil, nil, errgo.Notef(err, "cannot read agents file")
+		}
+		client.WebPageVisitor = httpbakery.NewMultiVisitor(v, httpbakery.WebBrowserVisitor)
+	} else {
+		client.VisitWebPage = httpbakery.OpenWebBrowser
+	}
 	if p.insecure {
 		rt := *http.DefaultTransport.(*http.Transport)
 		rt.TLSClientConfig = &tls.Config{
@@ -412,10 +427,9 @@ func newClient(p *params) (*cookiejar.Jar, *httpbakery.Client, error) {
 		return nil, client, nil
 	}
 
-	cookiejarOptions := &cookiejar.Options{
+	jar, err := cookiejar.New(&cookiejar.Options{
 		Filename: p.cookieFile,
-	}
-	jar, err := cookiejar.New(cookiejarOptions)
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("cannot create cookie jar: %v", err)
 	}
@@ -536,4 +550,32 @@ func isAllCaps(s string) bool {
 		}
 	}
 	return true
+}
+
+// readAgentsFile reads the file at path and returns an
+// agent visitor suitable for performing agent authentication
+// with the information found therein.
+func readAgentsFile(path string) (*agent.Visitor, error) {
+	var v agent.Visitor
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if err := json.NewDecoder(f).Decode(&v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func defaultAgentFile() string {
+	return filepath.Join(homeDir(), ".agents")
+}
+
+// homeDir returns the OS-specific home path as specified in the environment.
+func homeDir() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(os.Getenv("HOMEDRIVE"), os.Getenv("HOMEPATH"))
+	}
+	return os.Getenv("HOME")
 }
