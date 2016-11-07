@@ -15,12 +15,10 @@ import (
 	jc "github.com/juju/testing/checkers"
 	"golang.org/x/net/context"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/errgo.v1"
 	"gopkg.in/macaroon-bakery.v2-unstable/bakery"
 	"gopkg.in/macaroon-bakery.v2-unstable/bakery/checkers"
 	"gopkg.in/macaroon-bakery.v2-unstable/bakerytest"
 	"gopkg.in/macaroon-bakery.v2-unstable/httpbakery"
-	"gopkg.in/macaroon.v2-unstable"
 	flag "launchpad.net/gnuflag"
 )
 
@@ -322,7 +320,7 @@ func rawMessage(s string) *json.RawMessage {
 	return &m
 }
 
-func (*suite) TestNewContext(c *gc.C) {
+func (*suite) TestNewRequest(c *gc.C) {
 	for i, test := range newRequestTests {
 		c.Logf("test %d: %s", i, test.about)
 		fset := flag.NewFlagSet("http", flag.ContinueOnError)
@@ -350,12 +348,12 @@ func (*suite) TestNewContext(c *gc.C) {
 }
 
 var requestDoTests = []struct {
-	about             string
-	url               string
-	req               request
-	expectRequest     http.Request
-	expectRequestBody string
-	stdin             string
+	about                 string
+	url                   string
+	req                   request
+	expectHTTPRequest     http.Request
+	expectHTTPRequestBody string
+	stdin                 string
 }{{
 	about: "get request with header",
 	url:   "/foo",
@@ -365,7 +363,7 @@ var requestDoTests = []struct {
 			"X-Something": {"foo"},
 		},
 	},
-	expectRequest: http.Request{
+	expectHTTPRequest: http.Request{
 		URL: &url.URL{
 			Path: "/foo",
 		},
@@ -384,7 +382,7 @@ var requestDoTests = []struct {
 			"y": {"yval"},
 		},
 	},
-	expectRequest: http.Request{
+	expectHTTPRequest: http.Request{
 		Method: "GET",
 		URL: &url.URL{
 			Path:     "/foo",
@@ -405,7 +403,7 @@ var requestDoTests = []struct {
 			"y": {"yval"},
 		},
 	},
-	expectRequest: http.Request{
+	expectHTTPRequest: http.Request{
 		Method: "GET",
 		URL: &url.URL{
 			Path:     "/foo",
@@ -426,7 +424,7 @@ var requestDoTests = []struct {
 			"y": {"yval"},
 		},
 	},
-	expectRequest: http.Request{
+	expectHTTPRequest: http.Request{
 		Method: "GET",
 		URL: &url.URL{
 			Path:     "/foo",
@@ -448,7 +446,7 @@ var requestDoTests = []struct {
 			"y": {"yval"},
 		},
 	},
-	expectRequest: http.Request{
+	expectHTTPRequest: http.Request{
 		Method: "POST",
 		URL: &url.URL{
 			Path: "/foo",
@@ -470,7 +468,7 @@ var requestDoTests = []struct {
 			"Content-Type": {"application/json"},
 		},
 	},
-	expectRequest: http.Request{
+	expectHTTPRequest: http.Request{
 		URL: &url.URL{
 			Path: "/foo",
 		},
@@ -479,7 +477,7 @@ var requestDoTests = []struct {
 		},
 		Method: "POST",
 	},
-	expectRequestBody: `{"x":"hello"}`,
+	expectHTTPRequestBody: `{"x":"hello"}`,
 }}
 
 func (*suite) TestRequestDo(c *gc.C) {
@@ -503,55 +501,52 @@ func (*suite) TestRequestDo(c *gc.C) {
 		// as it will contain all kinds of stuff that we aren't
 		// that concerned with. Instead, test that the
 		// data we've specified is there in the request.
-		c.Assert(h.request.Method, gc.Equals, test.expectRequest.Method)
-		for attr, vals := range test.expectRequest.Header {
-			c.Assert(h.request.Header[attr], jc.DeepEquals, vals, gc.Commentf("attr %s", attr))
+		c.Assert(h.httpRequest.Method, gc.Equals, test.expectHTTPRequest.Method)
+		for attr, vals := range test.expectHTTPRequest.Header {
+			c.Assert(h.httpRequest.Header[attr], jc.DeepEquals, vals, gc.Commentf("attr %s", attr))
 		}
-		h.request.URL.Host = ""
-		c.Assert(h.request.URL, jc.DeepEquals, test.expectRequest.URL)
-		c.Assert(string(h.requestBody), gc.Equals, test.expectRequestBody)
+		h.httpRequest.URL.Host = ""
+		c.Assert(h.httpRequest.URL, jc.DeepEquals, test.expectHTTPRequest.URL)
+		c.Assert(string(h.httpRequestBody), gc.Equals, test.expectHTTPRequestBody)
 	}
 }
 
 func (*suite) TestMacaraq(c *gc.C) {
 	checked := false
-	d := bakerytest.NewDischarger(nil, httpbakery.ThirdPartyCaveatCheckerFunc(func(_ *http.Request, info *bakery.ThirdPartyCaveatInfo) ([]checkers.Caveat, error) {
-		if info.Condition != "something" {
+	d := bakerytest.NewDischarger(nil, httpbakery.ThirdPartyCaveatCheckerFunc(func(_ context.Context, _ *http.Request, info *bakery.ThirdPartyCaveatInfo) ([]checkers.Caveat, error) {
+		if string(info.Condition) != "something" {
 			return nil, fmt.Errorf("unexpected 3rd party cond")
 		}
 		checked = true
-		return []checkers.Caveat{
-			checkers.DeclaredCaveat("username", "bob"),
-		}, nil
+		return nil, nil
 	}))
-
 	key, err := bakery.GenerateKey()
 	c.Assert(err, gc.IsNil)
 	b := bakery.New(bakery.BakeryParams{
-		Location:       "here",
-		Locator:        d,
-		Key:            key,
-		IdentityClient: idmClient{d.Location()},
+		Locator: httpbakery.NewThirdPartyLocator(nil, nil),
+		Key:     key,
 	})
+	op := bakery.Op{"x", "x"}
 	svc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		req.ParseForm()
-
-		authInfo, checkErr := b.Checker.Auth(httpbakery.RequestMacaroons(req)...).Allow(context.TODO(), bakery.LoginOp)
+		_, checkErr := b.Checker.Auth(httpbakery.RequestMacaroons(req)...).Allow(context.Background(), op)
 		if checkErr == nil {
-			c.Check(authInfo.Identity.Id(), gc.Equals, "bob")
 			w.Header().Set("Content-Type", "application/json")
 			data, err := json.Marshal(req.Form)
 			c.Check(err, gc.IsNil)
 			w.Write(data)
 			return
 		}
-		derr, ok := errgo.Cause(checkErr).(*bakery.DischargeRequiredError)
-		if !ok {
-			c.Error("got non-discharge-required error: %v", checkErr)
-			http.Error(w, "unexpected error", http.StatusInternalServerError)
-			return
-		}
-		m, err := b.Oven.NewMacaroon(context.TODO(), macaroon.LatestVersion, time.Now().Add(time.Hour), derr.Caveats, derr.Ops...)
+		m, err := b.Oven.NewMacaroon(
+			context.Background(),
+			bakery.LatestVersion,
+			time.Now().Add(time.Hour),
+			[]checkers.Caveat{{
+				Location:  d.Location(),
+				Condition: "something",
+			}},
+			op,
+		)
 		c.Check(err, gc.IsNil)
 		httpbakery.WriteDischargeRequiredError(w, m, "/", checkErr)
 	}))
@@ -581,47 +576,22 @@ func (*suite) TestMacaraq(c *gc.C) {
 }
 
 type handler struct {
-	request     http.Request
-	requestBody []byte
+	httpRequest     http.Request
+	httpRequestBody []byte
 
 	next http.Handler
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	req.ParseForm()
-	h.request = *req
+	h.httpRequest = *req
 	data, err := ioutil.ReadAll(req.Body)
 	if err != nil {
 		panic(err)
 	}
-	h.requestBody = data
+	h.httpRequestBody = data
 	req.Body = ioutil.NopCloser(bytes.NewReader(data))
 	if h.next != nil {
 		h.next.ServeHTTP(w, req)
 	}
-}
-
-type idmClient struct {
-	dischargerURL string
-}
-
-func (c idmClient) IdentityFromContext(ctxt context.Context) (bakery.Identity, []checkers.Caveat, error) {
-	return nil, []checkers.Caveat{{
-		Location:  c.dischargerURL,
-		Condition: "something",
-	}}, nil
-}
-
-func (c idmClient) DeclaredIdentity(declared map[string]string) (bakery.Identity, error) {
-	return simpleIdentity(declared["username"]), nil
-}
-
-type simpleIdentity string
-
-func (simpleIdentity) Domain() string {
-	return ""
-}
-
-func (id simpleIdentity) Id() string {
-	return string(id)
 }

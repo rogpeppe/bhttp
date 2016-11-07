@@ -3,8 +3,8 @@ github.com/juju/ansiterm	git	b99631de12cf04a906c1d4e4ec54fb86eae5863d	2016-09-07
 github.com/juju/go4	git	40d72ab9641a2a8c36a9c46a51e28367115c8e59	2016-02-22T16:32:58Z
 github.com/juju/httprequest	git	d14a92d27334700b567fc7ebfe051d099264a5ff	2016-12-01T18:25:20Z
 github.com/juju/loggo	git	3b7ece48644d35850f4ced4c2cbc2cf8413f58e0	2016-08-18T02:57:24Z
-github.com/juju/persistent-cookiejar	git	b48f5b9290d63455d10de0c0e4c26e06e6e74842	2016-10-07T16:41:21Z
-github.com/juju/testing	git	b8689951f6db31943dd8c3d540b8c4dd368cf850	2016-10-31T10:37:13Z
+github.com/juju/persistent-cookiejar	git	5243747bf8f2d0897f6c7a52799327dc97d585e8	2016-11-15T13:33:28Z
+github.com/juju/testing	git	5ea77166c8c6a8f56f258565288c4714aa399283	2016-11-24T00:43:14Z
 github.com/juju/webbrowser	git	54b8c57083b4afb7dc75da7f13e2967b2606a507	2016-03-09T14:36:29Z
 github.com/julienschmidt/httprouter	git	77a895ad01ebc98a4dc95d8355bc825ce80a56f6	2015-10-13T22:55:20Z
 github.com/lunixbochs/vtclean	git	4fbf7632a2c6d3fbdb9931439bdbbeded02cbe36	2016-01-25T03:51:06Z
@@ -14,10 +14,12 @@ github.com/rogpeppe/fastuuid	git	6724a57986aff9bff1a1770e9347036def7c89f6	2015-0
 github.com/rogpeppe/rjson	git	77220b71d3272b9f756596b7b42511921bb6e96c	2015-10-26T20:09:57Z
 golang.org/x/crypto	git	8e06e8ddd9629eb88639aba897641bff8031f1d3	2016-09-22T17:06:29Z
 golang.org/x/net	git	ea47fc708ee3e20177f3ca3716217c4ab75942cb	2015-08-29T23:03:18Z
+golang.org/x/sys	git	9bb9f0998d48b31547d975974935ae9b48c7a03c	2016-10-12T00:19:20Z
 gopkg.in/check.v1	git	4f90aeace3a26ad7021961c297b22c42160c7b25	2016-01-05T16:49:36Z
-gopkg.in/errgo.v1	git	66cb46252b94c1f3d65646f54ee8043ab38d766c	2015-10-07T15:31:57Z
-gopkg.in/macaroon-bakery.v2-unstable	git	152316b6be844672054972fff0e9a3fe966950b5	2016-12-01T18:34:25Z
-gopkg.in/macaroon.v2-unstable	git	e4c879958311648cb7f2c2b97290bee05c02718d	2016-11-18T07:12:15Z
+gopkg.in/errgo.v1	git	442357a80af5c6bf9b6d51ae791a39c3421004f3	2016-12-22T12:58:16Z
+gopkg.in/macaroon-bakery.v2-unstable	git	9d493f0c78958a20d2852ed5083c71af4cf6431a	2017-01-12T13:29:59Z
+gopkg.in/macaroon.v2-unstable	git	814436df5726e8e7b7548e94a8367858f09b5205	2017-01-20T12:42:09Z
 gopkg.in/mgo.v2	git	f2b6f6c918c452ad107eec89615f074e3bd80e33	2016-08-18T01:52:18Z
+gopkg.in/retry.v1	git	c09f6b86ba4d5d2cf5bdf0665364aec9fd4815db	2016-10-25T18:14:30Z
 gopkg.in/yaml.v2	git	a83829b6f1293c91addabc89d0571c246397bbf4	2016-03-01T20:40:22Z
-launchpad.net/gnuflag	bzr	roger.peppe@canonical.com-20150126181550-ucyih42xy2uq6qz5	14
+launchpad.net/gnuflag	bzr	roger.peppe@canonical.com-20140716064605-pk32dnmfust02yab	13
