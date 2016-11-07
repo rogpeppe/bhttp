@@ -360,7 +360,7 @@ func showResponse(p *params, resp *http.Response, stdout io.Writer) error {
 			isJSONResp = mediaType == "application/json"
 		}
 	}
-	if !isJSONResp {
+	if !isJSONResp || p.raw {
 		// TODO uncompress?
 		io.Copy(stdout, resp.Body)
 		return nil
