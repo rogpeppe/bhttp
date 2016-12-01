@@ -21,7 +21,7 @@ import (
 	"github.com/juju/loggo"
 	"github.com/juju/persistent-cookiejar"
 	"github.com/rogpeppe/rjson"
-	"gopkg.in/macaroon-bakery.v1/httpbakery"
+	"gopkg.in/macaroon-bakery.v2-unstable/httpbakery"
 	flag "launchpad.net/gnuflag"
 )
 
@@ -102,7 +102,7 @@ type params struct {
 	keyVals []keyVal
 }
 
-type context struct {
+type request struct {
 	url       *url.URL
 	stdin     io.Reader
 	method    string
@@ -123,7 +123,7 @@ type keyVal struct {
 
 func main() {
 	fset := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
-	ctxt, p, err := newContext(fset, os.Args[1:])
+	req, p, err := newRequest(fset, os.Args[1:])
 	if err != nil {
 		if err == errUsage {
 			fset.Usage()
@@ -143,7 +143,7 @@ func main() {
 	if p.useStdin {
 		stdin = os.Stdin
 	}
-	resp, err := ctxt.doRequest(client, stdin)
+	resp, err := req.do(client, stdin)
 	if err != nil {
 		fatalf("%v", err)
 	}
@@ -153,7 +153,7 @@ func main() {
 	}
 }
 
-func newContext(fset *flag.FlagSet, args []string) (*context, *params, error) {
+func newRequest(fset *flag.FlagSet, args []string) (*request, *params, error) {
 	p, err := parseArgs(fset, args)
 	if err != nil {
 		return nil, nil, err
@@ -161,7 +161,7 @@ func newContext(fset *flag.FlagSet, args []string) (*context, *params, error) {
 	if p.debug {
 		loggo.ConfigureLoggers("DEBUG")
 	}
-	ctxt := &context{
+	req := &request{
 		url:       p.url,
 		method:    p.method,
 		header:    make(http.Header),
@@ -170,21 +170,21 @@ func newContext(fset *flag.FlagSet, args []string) (*context, *params, error) {
 		jsonObj:   make(map[string]interface{}),
 	}
 	for _, kv := range p.keyVals {
-		if err := ctxt.addKeyVal(p, kv); err != nil {
+		if err := req.addKeyVal(p, kv); err != nil {
 			return nil, nil, err
 		}
 	}
-	if p.useStdin && (len(ctxt.form) > 0 || len(ctxt.jsonObj) > 0) {
+	if p.useStdin && (len(req.form) > 0 || len(req.jsonObj) > 0) {
 		return nil, nil, errors.New("cannot read body from stdin when form or JSON body is specified")
 	}
 	if p.basicAuth != "" {
-		ctxt.header.Set("Authorization",
+		req.header.Set("Authorization",
 			"Basic "+base64.StdEncoding.EncodeToString([]byte(p.basicAuth)))
 	}
-	if p.json && ctxt.header.Get("Content-Type") == "" {
-		ctxt.header.Set("Content-Type", "application/json")
+	if p.json && req.header.Get("Content-Type") == "" {
+		req.header.Set("Content-Type", "application/json")
 	}
-	return ctxt, p, nil
+	return req, p, nil
 }
 
 func parseArgs(fset *flag.FlagSet, args []string) (*params, error) {
@@ -295,34 +295,34 @@ func isMethod(s string) bool {
 	return true
 }
 
-func (ctxt *context) doRequest(client *httpbakery.Client, stdin io.Reader) (*http.Response, error) {
-	req := &http.Request{
-		URL:        ctxt.url,
+func (req *request) do(client *httpbakery.Client, stdin io.Reader) (*http.Response, error) {
+	httpReq := &http.Request{
+		URL:        req.url,
 		Proto:      "HTTP/1.1",
 		ProtoMajor: 1,
 		ProtoMinor: 1,
-		Method:     ctxt.method,
-		Header:     ctxt.header,
+		Method:     req.method,
+		Header:     req.header,
 	}
-	if len(ctxt.urlValues) > 0 {
-		if req.URL.RawQuery != "" {
-			req.URL.RawQuery += "&"
+	if len(req.urlValues) > 0 {
+		if httpReq.URL.RawQuery != "" {
+			httpReq.URL.RawQuery += "&"
 		}
-		req.URL.RawQuery += ctxt.urlValues.Encode()
+		httpReq.URL.RawQuery += req.urlValues.Encode()
 	}
 	var body []byte
 	switch {
-	case len(ctxt.form) > 0:
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		body = []byte(ctxt.form.Encode())
+	case len(req.form) > 0:
+		httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		body = []byte(req.form.Encode())
 
-	case len(ctxt.jsonObj) > 0:
-		data, err := json.Marshal(ctxt.jsonObj)
+	case len(req.jsonObj) > 0:
+		data, err := json.Marshal(req.jsonObj)
 		if err != nil {
 			return nil, fmt.Errorf("cannot marshal JSON: %v", err)
 		}
 		body = data
-	case req.Method != "GET" && req.Method != "HEAD" && stdin != nil:
+	case httpReq.Method != "GET" && httpReq.Method != "HEAD" && stdin != nil:
 		// No fields specified and it looks like we need a body.
 
 		// TODO check if it's seekable or make a temp file.
@@ -333,9 +333,10 @@ func (ctxt *context) doRequest(client *httpbakery.Client, stdin io.Reader) (*htt
 		// TODO if we're expecting JSON, accept rjson too.
 		body = data
 	}
-	req.ContentLength = int64(len(body))
+	httpReq.ContentLength = int64(len(body))
+	httpReq.Body = ioutil.NopCloser(bytes.NewReader(body))
 
-	resp, err := client.DoWithBody(req, bytes.NewReader(body))
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("cannot do HTTP request: %v", err)
 	}
@@ -418,19 +419,19 @@ func newClient(p *params) (*cookiejar.Jar, *httpbakery.Client, error) {
 	return jar, client, nil
 }
 
-var sepFuncs = map[string]func(ctxt *context, p *params, key, val string) error{
-	":":  (*context).httpHeader,
-	"==": (*context).urlParam,
-	"=":  (*context).dataString,
-	":=": (*context).jsonOther,
+var sepFuncs = map[string]func(req *request, p *params, key, val string) error{
+	":":  (*request).httpHeader,
+	"==": (*request).urlParam,
+	"=":  (*request).dataString,
+	":=": (*request).jsonOther,
 }
 
-func (ctxt *context) addKeyVal(p *params, kv keyVal) error {
+func (req *request) addKeyVal(p *params, kv keyVal) error {
 	f := sepFuncs[kv.sep]
 	if f == nil {
 		return fmt.Errorf("key value type separator %q not yet recognized", kv.sep)
 	}
-	return f(ctxt, p, kv.key, kv.val)
+	return f(req, p, kv.key, kv.val)
 }
 
 // separators holds all the possible key-pair separators, most ambiguous first.
@@ -475,29 +476,29 @@ func parseKeyVal(s string) (keyVal, error) {
 }
 
 // key:val
-func (ctxt *context) httpHeader(p *params, key, val string) error {
-	ctxt.header.Add(key, val)
+func (req *request) httpHeader(p *params, key, val string) error {
+	req.header.Add(key, val)
 	return nil
 }
 
 // key==val
-func (ctxt *context) urlParam(p *params, key, val string) error {
-	ctxt.urlValues.Add(key, val)
+func (req *request) urlParam(p *params, key, val string) error {
+	req.urlValues.Add(key, val)
 	return nil
 }
 
 // key=val
-func (ctxt *context) dataString(p *params, key, val string) error {
+func (req *request) dataString(p *params, key, val string) error {
 	if p.json {
-		ctxt.jsonObj[key] = val
+		req.jsonObj[key] = val
 	} else {
-		ctxt.form.Add(key, val)
+		req.form.Add(key, val)
 	}
 	return nil
 }
 
 // key:=val
-func (ctxt *context) jsonOther(p *params, key, val string) error {
+func (req *request) jsonOther(p *params, key, val string) error {
 	if !p.json {
 		return fmt.Errorf("cannot specify non-string key unless --json is specified")
 	}
@@ -505,7 +506,7 @@ func (ctxt *context) jsonOther(p *params, key, val string) error {
 	if err := json.Unmarshal([]byte(val), &m); err != nil {
 		return fmt.Errorf("invalid JSON in key %s: %v", key, err)
 	}
-	ctxt.jsonObj[key] = &m
+	req.jsonObj[key] = &m
 	return nil
 }
 
