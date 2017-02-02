@@ -411,7 +411,11 @@ func newClient(p *params) (*cookiejar.Jar, *httpbakery.Client, error) {
 	if p.cookieFile == "" {
 		return nil, client, nil
 	}
-	jar, err := cookiejar.New(nil)
+
+	cookiejarOptions := &cookiejar.Options{
+		Filename: p.cookieFile,
+	}
+	jar, err := cookiejar.New(cookiejarOptions)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cannot create cookie jar: %v", err)
 	}
