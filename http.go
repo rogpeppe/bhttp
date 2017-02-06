@@ -20,13 +20,13 @@ import (
 	"strings"
 	"unicode"
 
+	flag "github.com/juju/gnuflag"
 	"github.com/juju/loggo"
 	"github.com/juju/persistent-cookiejar"
 	"github.com/rogpeppe/rjson"
 	errgo "gopkg.in/errgo.v1"
 	"gopkg.in/macaroon-bakery.v2-unstable/httpbakery"
 	"gopkg.in/macaroon-bakery.v2-unstable/httpbakery/agent"
-	flag "launchpad.net/gnuflag"
 )
 
 const helpMessage = `usage: http [flag...] [METHOD] URL [REQUEST_ITEM [REQUEST_ITEM...]]

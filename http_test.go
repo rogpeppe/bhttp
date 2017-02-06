@@ -12,6 +12,7 @@ import (
 	stdtesting "testing"
 	"time"
 
+	flag "github.com/juju/gnuflag"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	"golang.org/x/net/context"
@@ -21,7 +22,6 @@ import (
 	"gopkg.in/macaroon-bakery.v2-unstable/bakery/checkers"
 	"gopkg.in/macaroon-bakery.v2-unstable/bakerytest"
 	"gopkg.in/macaroon-bakery.v2-unstable/httpbakery"
-	flag "launchpad.net/gnuflag"
 )
 
 type suite struct {
