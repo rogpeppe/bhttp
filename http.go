@@ -87,19 +87,20 @@ const helpMessage = `usage: http [flag...] [METHOD] URL [REQUEST_ITEM [REQUEST_I
 `
 
 type params struct {
-	json       bool
-	form       bool
-	headers    bool
-	body       bool
-	rjson      bool
-	raw        bool
-	debug      bool
-	noBrowser  bool
-	basicAuth  string
-	cookieFile string
-	agentFile  string
-	useStdin   bool
-	insecure   bool
+	json        bool
+	form        bool
+	headers     bool
+	body        bool
+	rjson       bool
+	raw         bool
+	debug       bool
+	noBrowser   bool
+	basicAuth   string
+	cookieFile  string
+	agentFile   string
+	useStdin    bool
+	insecure    bool
+	checkStatus bool
 	// TODO auth, verify, proxy, file, timeout
 
 	url     *url.URL
@@ -155,6 +156,10 @@ func main() {
 	defer resp.Body.Close()
 	if err := showResponse(p, resp, os.Stdout); err != nil {
 		fatalf("%v", err)
+	}
+	statusClass := resp.StatusCode / 100
+	if p.checkStatus && statusClass != 2 {
+		os.Exit(statusClass)
 	}
 }
 
@@ -220,6 +225,8 @@ func parseArgs(fset *flag.FlagSet, args []string) (*params, error) {
 	fset.StringVar(&p.basicAuth, "auth", "", "")
 
 	fset.BoolVar(&p.insecure, "insecure", false, "skip HTTPS certificate checking")
+
+	fset.BoolVar(&p.checkStatus, "check-status", false, "if the HTTP status is not 2xx, print a warning and use the first digit of the status code as the exit code")
 
 	fset.StringVar(&p.cookieFile, "cookiefile", cookiejar.DefaultCookieFile(), "file to store persistent cookies in")
 
@@ -351,6 +358,9 @@ func (req *request) do(client *httpbakery.Client, stdin io.Reader) (*http.Respon
 }
 
 func showResponse(p *params, resp *http.Response, stdout io.Writer) error {
+	if p.checkStatus && resp.StatusCode/100 != 2 {
+		fmt.Fprintf(os.Stderr, "warning: HTTP response code %s\n", resp.Status)
+	}
 	if p.headers {
 		fmt.Fprintf(stdout, "%s %s\n", resp.Proto, resp.Status)
 		printHeaders(stdout, resp.Header)
