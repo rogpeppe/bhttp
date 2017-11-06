@@ -17,11 +17,11 @@ import (
 	jc "github.com/juju/testing/checkers"
 	"golang.org/x/net/context"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/errgo.v1"
-	"gopkg.in/macaroon-bakery.v2-unstable/bakery"
-	"gopkg.in/macaroon-bakery.v2-unstable/bakery/checkers"
-	"gopkg.in/macaroon-bakery.v2-unstable/bakerytest"
-	"gopkg.in/macaroon-bakery.v2-unstable/httpbakery"
+	"gopkg.in/macaroon-bakery.v2/bakery"
+	"gopkg.in/macaroon-bakery.v2/bakery/checkers"
+	"gopkg.in/macaroon-bakery.v2/bakery/identchecker"
+	"gopkg.in/macaroon-bakery.v2/bakerytest"
+	"gopkg.in/macaroon-bakery.v2/httpbakery"
 )
 
 type suite struct {
@@ -517,40 +517,39 @@ func (*suite) TestRequestDo(c *gc.C) {
 
 func (*suite) TestMacaraq(c *gc.C) {
 	checked := false
-	d := bakerytest.NewDischarger(nil, httpbakery.ThirdPartyCaveatCheckerFunc(func(_ context.Context, _ *http.Request, info *bakery.ThirdPartyCaveatInfo) ([]checkers.Caveat, error) {
+	d := bakerytest.NewDischarger(nil)
+	d.Checker = httpbakery.ThirdPartyCaveatCheckerFunc(func(_ context.Context, _ *http.Request, info *bakery.ThirdPartyCaveatInfo, _ *httpbakery.DischargeToken) ([]checkers.Caveat, error) {
 		if string(info.Condition) != "something" {
 			return nil, fmt.Errorf("unexpected 3rd party cond")
 		}
 		checked = true
 		return nil, nil
-	}))
+	})
 	key, err := bakery.GenerateKey()
 	c.Assert(err, gc.IsNil)
-	b := bakery.New(bakery.BakeryParams{
+	b := identchecker.NewBakery(identchecker.BakeryParams{
 		Location:       "here",
 		Locator:        httpbakery.NewThirdPartyLocator(nil, nil),
 		Key:            key,
 		IdentityClient: idmClient{d.Location()},
 	})
+	oven := &httpbakery.Oven{
+		Oven:        b.Oven,
+		AuthnExpiry: time.Hour,
+		AuthzExpiry: time.Hour,
+	}
 	svc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		ctx := context.Background()
 		req.ParseForm()
-		_, checkErr := b.Checker.Auth(httpbakery.RequestMacaroons(req)...).Allow(context.Background(), bakery.LoginOp)
-		if checkErr == nil {
-			w.Header().Set("Content-Type", "application/json")
-			data, err := json.Marshal(req.Form)
-			c.Check(err, gc.IsNil)
-			w.Write(data)
+		_, checkErr := b.Checker.Auth(httpbakery.RequestMacaroons(req)...).Allow(context.Background(), identchecker.LoginOp)
+		if checkErr != nil {
+			httpbakery.WriteError(ctx, w, oven.Error(ctx, req, checkErr))
 			return
 		}
-		derr, ok := errgo.Cause(checkErr).(*bakery.DischargeRequiredError)
-		if !ok {
-			c.Errorf("got non-discharge-required error: %v", checkErr)
-			http.Error(w, "unexpected error", http.StatusInternalServerError)
-			return
-		}
-		m, err := b.Oven.NewMacaroon(context.TODO(), bakery.LatestVersion, time.Now().Add(time.Hour), derr.Caveats, derr.Ops...)
+		w.Header().Set("Content-Type", "application/json")
+		data, err := json.Marshal(req.Form)
 		c.Check(err, gc.IsNil)
-		httpbakery.WriteDischargeRequiredError(w, m, "/", checkErr)
+		w.Write(data)
 	}))
 
 	fset := flag.NewFlagSet("http", flag.ContinueOnError)
@@ -602,14 +601,14 @@ type idmClient struct {
 	dischargerURL string
 }
 
-func (c idmClient) IdentityFromContext(ctxt context.Context) (bakery.Identity, []checkers.Caveat, error) {
+func (c idmClient) IdentityFromContext(ctxt context.Context) (identchecker.Identity, []checkers.Caveat, error) {
 	return nil, []checkers.Caveat{{
 		Location:  c.dischargerURL,
 		Condition: "something",
 	}}, nil
 }
 
-func (c idmClient) DeclaredIdentity(declared map[string]string) (bakery.Identity, error) {
+func (c idmClient) DeclaredIdentity(ctx context.Context, declared map[string]string) (identchecker.Identity, error) {
 	return simpleIdentity(declared["username"]), nil
 }
 

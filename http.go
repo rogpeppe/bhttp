@@ -25,8 +25,8 @@ import (
 	"github.com/juju/persistent-cookiejar"
 	"github.com/rogpeppe/rjson"
 	errgo "gopkg.in/errgo.v1"
-	"gopkg.in/macaroon-bakery.v2-unstable/httpbakery"
-	"gopkg.in/macaroon-bakery.v2-unstable/httpbakery/agent"
+	"gopkg.in/macaroon-bakery.v2/httpbakery"
+	"gopkg.in/macaroon-bakery.v2/httpbakery/agent"
 )
 
 const helpMessage = `usage: http [flag...] [METHOD] URL [REQUEST_ITEM [REQUEST_ITEM...]]
@@ -421,10 +421,11 @@ func newClient(p *params) (*cookiejar.Jar, *httpbakery.Client, error) {
 		if err != nil {
 			return nil, nil, errgo.Notef(err, "cannot read agents file")
 		}
-		client.WebPageVisitor = httpbakery.NewMultiVisitor(v, httpbakery.WebBrowserVisitor)
-	} else {
-		client.VisitWebPage = httpbakery.OpenWebBrowser
+		if err := agent.SetUpAuth(client, v); err != nil {
+			return nil, nil, errgo.Mask(err)
+		}
 	}
+	client.AddInteractor(httpbakery.WebBrowserInteractor{})
 	if p.insecure {
 		rt := *http.DefaultTransport.(*http.Transport)
 		rt.TLSClientConfig = &tls.Config{
@@ -565,8 +566,8 @@ func isAllCaps(s string) bool {
 // readAgentsFile reads the file at path and returns an
 // agent visitor suitable for performing agent authentication
 // with the information found therein.
-func readAgentsFile(path string) (*agent.Visitor, error) {
-	var v agent.Visitor
+func readAgentsFile(path string) (*agent.AuthInfo, error) {
+	var v agent.AuthInfo
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
