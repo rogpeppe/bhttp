@@ -29,6 +29,8 @@ import (
 	"gopkg.in/macaroon-bakery.v2/httpbakery/agent"
 )
 
+var logger = loggo.GetLogger("bhttp")
+
 const helpMessage = `usage: http [flag...] [METHOD] URL [REQUEST_ITEM [REQUEST_ITEM...]]
 
   METHOD
@@ -121,6 +123,14 @@ type request struct {
 
 var errUsage = errors.New("bad usage")
 
+type exitError struct {
+	code int
+}
+
+func (e *exitError) Error() string {
+	return fmt.Sprintf("exit with code %d", e.code)
+}
+
 type keyVal struct {
 	key string
 	sep string
@@ -128,6 +138,18 @@ type keyVal struct {
 }
 
 func main() {
+	err := main0()
+	if err == nil {
+		return
+	}
+	if err, ok := err.(*exitError); ok {
+		os.Exit(err.code)
+	}
+	fmt.Fprintf(os.Stderr, "%v\n", err)
+	os.Exit(1)
+}
+
+func main0() error {
 	fset := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	req, p, err := newRequest(fset, os.Args[1:])
 	if err != nil {
@@ -136,7 +158,7 @@ func main() {
 		} else {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 		}
-		os.Exit(2)
+		return &exitError{2}
 	}
 	jar, client, err := newClient(p)
 	if err != nil {
@@ -151,16 +173,17 @@ func main() {
 	}
 	resp, err := req.do(client, stdin)
 	if err != nil {
-		fatalf("%v", err)
+		return errgo.Mask(err)
 	}
 	defer resp.Body.Close()
 	if err := showResponse(p, resp, os.Stdout); err != nil {
-		fatalf("%v", err)
+		return errgo.Mask(err)
 	}
 	statusClass := resp.StatusCode / 100
 	if p.checkStatus && statusClass != 2 {
-		os.Exit(statusClass)
+		return &exitError{statusClass}
 	}
+	return nil
 }
 
 func newRequest(fset *flag.FlagSet, args []string) (*request, *params, error) {
@@ -170,6 +193,12 @@ func newRequest(fset *flag.FlagSet, args []string) (*request, *params, error) {
 	}
 	if p.debug {
 		loggo.ConfigureLoggers("DEBUG")
+		http.DefaultTransport = loggingTransport{
+			transport: http.DefaultTransport,
+			printf: func(f string, a ...interface{}) {
+				fmt.Fprintf(os.Stderr, f, a...)
+			},
+		}
 	}
 	req := &request{
 		url:       p.url,
@@ -212,7 +241,7 @@ func parseArgs(fset *flag.FlagSet, args []string) (*params, error) {
 	fset.BoolVar(&noBody, "B", false, "do not print response body")
 	fset.BoolVar(&noBody, "body", false, "")
 
-	fset.BoolVar(&p.debug, "debug", false, "print debugging messages")
+	fset.BoolVar(&p.debug, "debug", false, "print debugging messages, including all HTTP messages")
 
 	fset.BoolVar(&p.noBrowser, "W", false, "do not open macaroon-login URLs in web browser")
 	fset.BoolVar(&p.noBrowser, "no-browser", false, "")
@@ -589,4 +618,65 @@ func homeDir() string {
 		return filepath.Join(os.Getenv("HOMEDRIVE"), os.Getenv("HOMEPATH"))
 	}
 	return os.Getenv("HOME")
+}
+
+type loggingTransport struct {
+	transport http.RoundTripper
+	printf    func(f string, a ...interface{})
+}
+
+func (t loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	sendBody := replaceBody(&req.Body)
+
+	t.printf("> %s %s\n", req.Method, req.URL)
+	for _, line := range sortedHeader(req.Header) {
+		t.printf("> %s: %s\n", line.name, line.val)
+	}
+	if len(sendBody) > 0 {
+		t.printf("> body %q\n", sendBody)
+	}
+	t.printf(">\n")
+	resp, err := t.transport.RoundTrip(req)
+	if err != nil {
+		t.printf("< error %v\n", err)
+		return resp, err
+	}
+	respBody := replaceBody(&resp.Body)
+	t.printf("< %s\n", resp.Status)
+	for _, line := range sortedHeader(resp.Header) {
+		t.printf("< %s: %s\n", line.name, line.val)
+	}
+	if len(respBody) > 0 {
+		t.printf("< body %q\n", respBody)
+	}
+	t.printf("<\n")
+	return resp, nil
+}
+
+type headerLine struct {
+	name string
+	val  string
+}
+
+func sortedHeader(h http.Header) []headerLine {
+	var lines []headerLine
+	for name, vals := range h {
+		for _, val := range vals {
+			lines = append(lines, headerLine{name, val})
+		}
+	}
+	sort.SliceStable(lines, func(i, j int) bool {
+		return lines[i].name < lines[j].name
+	})
+	return lines
+}
+
+func replaceBody(r *io.ReadCloser) []byte {
+	if *r == nil {
+		return nil
+	}
+	data, _ := ioutil.ReadAll(*r)
+	(*r).Close()
+	*r = ioutil.NopCloser(bytes.NewReader(data))
+	return data
 }
