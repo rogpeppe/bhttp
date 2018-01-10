@@ -196,7 +196,7 @@ func newRequest(fset *flag.FlagSet, args []string) (*request, *params, error) {
 		http.DefaultTransport = loggingTransport{
 			transport: http.DefaultTransport,
 			printf: func(f string, a ...interface{}) {
-				logger.Debugf(f, a...)
+				fmt.Fprintf(os.Stderr, f, a...)
 			},
 		}
 	}
@@ -628,24 +628,47 @@ type loggingTransport struct {
 func (t loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	sendBody := replaceBody(&req.Body)
 
-	t.printf("HTTP send: %s %s {", req.Method, req.URL)
-	t.printf("- header: %q", req.Header)
-	if len(sendBody) > 0 {
-		t.printf("- body: %q", sendBody)
+	t.printf("> %s %s\n", req.Method, req.URL)
+	for _, line := range sortedHeader(req.Header) {
+		t.printf("> %s: %s\n", line.name, line.val)
 	}
+	if len(sendBody) > 0 {
+		t.printf("> body %q\n", sendBody)
+	}
+	t.printf(">\n")
 	resp, err := t.transport.RoundTrip(req)
 	if err != nil {
-		t.printf("} -> error %v", err)
+		t.printf("< error %v\n", err)
 		return resp, err
 	}
 	respBody := replaceBody(&resp.Body)
-	t.printf("} -> %s {", resp.Status)
-	t.printf("- header: %q", resp.Header)
-	if len(respBody) > 0 {
-		t.printf("- body: %q", respBody)
+	t.printf("< %s\n", resp.Status)
+	for _, line := range sortedHeader(resp.Header) {
+		t.printf("< %s: %s\n", line.name, line.val)
 	}
-	t.printf("}")
+	if len(respBody) > 0 {
+		t.printf("< body %q\n", respBody)
+	}
+	t.printf("<\n")
 	return resp, nil
+}
+
+type headerLine struct {
+	name string
+	val  string
+}
+
+func sortedHeader(h http.Header) []headerLine {
+	var lines []headerLine
+	for name, vals := range h {
+		for _, val := range vals {
+			lines = append(lines, headerLine{name, val})
+		}
+	}
+	sort.SliceStable(lines, func(i, j int) bool {
+		return lines[i].name < lines[j].name
+	})
+	return lines
 }
 
 func replaceBody(r *io.ReadCloser) []byte {
