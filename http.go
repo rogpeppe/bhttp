@@ -71,8 +71,8 @@ const helpMessage = `usage: http [flag...] [METHOD] URL [REQUEST_ITEM [REQUEST_I
       
           awesome:=true  amount:=42  colors:='["red", "green", "blue"]'
       
-      '@' Form file fields (only with --form, -f):
-      
+      '@' Form file fields (only with --form, -f): (NOT YET SUPPORTED)
+
           cs@~/Documents/CV.pdf
       
       '=@' A data field like '=', but takes a file path and embeds its content:
@@ -317,7 +317,7 @@ func parseArgs(fset *flag.FlagSet, args []string) (*params, error) {
 		if err != nil {
 			return nil, fmt.Errorf("cannot parse %q: %v", arg, err)
 		}
-		if kv.sep == "=" && p.method == "" {
+		if isDataSendingSep(kv.sep) && p.method == "" {
 			p.method = "POST"
 		}
 		p.keyVals[i] = kv
@@ -326,6 +326,11 @@ func parseArgs(fset *flag.FlagSet, args []string) (*params, error) {
 		p.method = "GET"
 	}
 	return &p, nil
+}
+
+func isDataSendingSep(sep string) bool {
+	sep = strings.TrimSuffix(sep, "@")
+	return sep == ":=" || sep == "=" || sep == ""
 }
 
 func isMethod(s string) bool {
@@ -478,10 +483,12 @@ func newClient(p *params) (*cookiejar.Jar, *httpbakery.Client, error) {
 }
 
 var sepFuncs = map[string]func(req *request, p *params, key, val string) error{
-	":":  (*request).httpHeader,
-	"==": (*request).urlParam,
-	"=":  (*request).dataString,
-	":=": (*request).jsonOther,
+	":":   (*request).httpHeader,
+	"==":  (*request).urlParam,
+	"=":   (*request).dataString,
+	"=@":  (*request).dataStringFile,
+	":=":  (*request).jsonOther,
+	":=@": (*request).jsonOtherFile,
 }
 
 func (req *request) addKeyVal(p *params, kv keyVal) error {
@@ -494,13 +501,13 @@ func (req *request) addKeyVal(p *params, kv keyVal) error {
 
 // separators holds all the possible key-pair separators, most ambiguous first.
 var separators = []string{
-	":=@",
-	":=",
-	":",
-	"==",
-	"=@",
-	"=",
-	"@",
+	":=@", // raw JSON file
+	":=",  // raw JSON value
+	":",   // HTTP header
+	"==",  // URL parameter
+	"=@",  // data field from file.
+	"=",   // data field.
+	"@",   // form file field.
 }
 
 func parseKeyVal(s string) (keyVal, error) {
@@ -517,16 +524,18 @@ func parseKeyVal(s string) (keyVal, error) {
 			continue
 		}
 		for _, sep := range separators {
-			if strings.HasPrefix(s[i:], sep) {
-				if len(keyBytes) == 0 {
-					return keyVal{}, fmt.Errorf("empty key")
-				}
-				return keyVal{
-					key: string(keyBytes),
-					sep: sep,
-					val: s[i+len(sep):],
-				}, nil
+			if !strings.HasPrefix(s[i:], sep) {
+				continue
 			}
+			if len(keyBytes) == 0 {
+				return keyVal{}, fmt.Errorf("empty key")
+			}
+			val := s[i+len(sep):]
+			return keyVal{
+				key: string(keyBytes),
+				sep: sep,
+				val: val,
+			}, nil
 		}
 		keyBytes = append(keyBytes, string(r)...)
 	}
@@ -555,6 +564,15 @@ func (req *request) dataString(p *params, key, val string) error {
 	return nil
 }
 
+// key=@val
+func (req *request) dataStringFile(p *params, key, val string) error {
+	data, err := ioutil.ReadFile(val)
+	if err != nil {
+		return err
+	}
+	return req.dataString(p, key, string(data))
+}
+
 // key:=val
 func (req *request) jsonOther(p *params, key, val string) error {
 	if !p.json {
@@ -566,6 +584,15 @@ func (req *request) jsonOther(p *params, key, val string) error {
 	}
 	req.jsonObj[key] = &m
 	return nil
+}
+
+// key:=@file
+func (req *request) jsonOtherFile(p *params, key, val string) error {
+	data, err := ioutil.ReadFile(val)
+	if err != nil {
+		return err
+	}
+	return req.jsonOther(p, key, string(data))
 }
 
 func fatalf(f string, a ...interface{}) {
