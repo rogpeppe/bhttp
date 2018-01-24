@@ -17,7 +17,7 @@ golang.org/x/net	git	a04bdaca5b32abe1c069418fb7088ae607de5bd0	2017-10-04T03:46:4
 gopkg.in/check.v1	git	4f90aeace3a26ad7021961c297b22c42160c7b25	2016-01-05T16:49:36Z
 gopkg.in/errgo.v1	git	442357a80af5c6bf9b6d51ae791a39c3421004f3	2016-12-22T12:58:16Z
 gopkg.in/httprequest.v1	git	35158f716c228fdf58b5a5b80cf331302d10160a	2017-11-03T09:19:05Z
-gopkg.in/macaroon-bakery.v2	git	a98e8ceacc89d466bea8dcffadbfd4b1f6037450	2018-01-10T13:16:30Z
+gopkg.in/macaroon-bakery.v2	git	a68c48773728f8aeb814e8e56dc174a6ee166281	2018-01-12T15:54:55Z
 gopkg.in/macaroon.v2	git	bed2a428da6e56d950bed5b41fcbae3141e5b0d0	2017-10-17T15:30:37Z
 gopkg.in/mgo.v2	git	3f83fa5005286a7fe593b055f0d7771a7dce4655	2016-08-18T02:01:20Z
 gopkg.in/retry.v1	git	01631078ef2fdce601e38cfe5f527fab24c9a6d2	2017-05-31T09:12:38Z
