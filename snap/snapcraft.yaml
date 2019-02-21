@@ -1,0 +1,25 @@
+name: bhttp
+version: git
+summary: Macaroon-aware HTTP command line client
+description: |
+  The bhttp snap provides the bhttp command line tool which replicates the
+  command-line interface of httpie but will also automatically obtain
+  macaroon-based authentication when required by the server.
+confinement: strict
+grade: stable
+base: core18
+
+apps:
+  bhttp:
+    command: bin/bhttp
+    plugs:
+      - home
+      - network
+      - network-bind
+
+parts:
+  bhttp:
+    plugin: godeps
+    source: .
+    source-type: git
+    go-importpath: github.com/rogpeppe/bhttp
