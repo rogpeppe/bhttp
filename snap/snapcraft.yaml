@@ -13,6 +13,7 @@ apps:
   bhttp:
     command: bin/bhttp
     plugs:
+      - desktop
       - home
       - network
       - network-bind
