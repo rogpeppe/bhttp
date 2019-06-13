@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	stdtesting "testing"
 	"time"
@@ -102,12 +103,14 @@ func (*suite) TestParseArg(c *gc.C) {
 	}
 }
 
-var newRequestTests = []struct {
+type newRequestTest struct {
 	about         string
 	args          []string
 	expectRequest request
 	expectError   string
-}{{
+}
+
+var newRequestTests = []newRequestTest{{
 	about:       "no arguments",
 	expectError: errUsage.Error(),
 }, {
@@ -324,30 +327,88 @@ func rawMessage(s string) *json.RawMessage {
 	return &m
 }
 
+func (test *newRequestTest) run(c *gc.C, testIndex int) {
+	c.Logf("test %d: %s", testIndex, test.about)
+	fset := flag.NewFlagSet("http", flag.ContinueOnError)
+	req, _, err := newRequest(fset, test.args)
+	if test.expectError != "" {
+		c.Assert(err, gc.ErrorMatches, test.expectError)
+		return
+	}
+	c.Assert(err, gc.IsNil)
+	if len(req.header) == 0 {
+		req.header = nil
+	}
+	if len(req.urlValues) == 0 {
+		req.urlValues = nil
+	}
+	if len(req.form) == 0 {
+		req.form = nil
+	}
+	if len(req.jsonObj) == 0 {
+		req.jsonObj = nil
+	}
+	c.Logf("url %s", req.url)
+	c.Assert(req, jc.DeepEquals, &test.expectRequest)
+}
+
 func (*suite) TestNewRequest(c *gc.C) {
 	for i, test := range newRequestTests {
-		c.Logf("test %d: %s", i, test.about)
-		fset := flag.NewFlagSet("http", flag.ContinueOnError)
-		req, _, err := newRequest(fset, test.args)
-		if test.expectError != "" {
-			c.Assert(err, gc.ErrorMatches, test.expectError)
-			continue
-		}
-		c.Assert(err, gc.IsNil)
-		if len(req.header) == 0 {
-			req.header = nil
-		}
-		if len(req.urlValues) == 0 {
-			req.urlValues = nil
-		}
-		if len(req.form) == 0 {
-			req.form = nil
-		}
-		if len(req.jsonObj) == 0 {
-			req.jsonObj = nil
-		}
-		c.Logf("url %s", req.url)
-		c.Assert(req, jc.DeepEquals, &test.expectRequest)
+		test.run(c, i)
+	}
+}
+
+func (*suite) TestNewRequestWithFileVals(c *gc.C) {
+	f, err := ioutil.TempFile("", "bhttp_test")
+	c.Assert(err, gc.IsNil)
+	defer os.Remove(f.Name())
+	text := `{"x":true}`
+	_, err = f.Write([]byte(text))
+	c.Assert(err, gc.IsNil)
+	f.Close()
+
+	tests := []newRequestTest{{
+		about: "form value in file",
+		args: []string{
+			"foo.com",
+			"j1=@" + f.Name(),
+		},
+		expectRequest: request{
+			method: "POST",
+			form: url.Values{
+				"j1": {text},
+			},
+			url: &url.URL{
+				Scheme: "http",
+				Host:   "foo.com",
+			},
+		},
+	}, {
+		about: "json data values in file",
+		args: []string{
+			"--json",
+			"foo.com",
+			"u1=@" + f.Name(),
+			"u2:=@" + f.Name(),
+		},
+		expectRequest: request{
+			method: "POST",
+			jsonObj: map[string]interface{}{
+				"u1": text,
+				"u2": rawMessage(text),
+			},
+			url: &url.URL{
+				Scheme: "http",
+				Host:   "foo.com",
+				Path:   "",
+			},
+			header: http.Header{
+				"Content-Type": {"application/json"},
+			},
+		},
+	}}
+	for i, test := range tests {
+		test.run(c, i)
 	}
 }
 
